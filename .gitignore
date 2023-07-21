@@ -1,0 +1,5 @@
+.cache/
+.thumbnails/
+venv/
+.idea/
+__pycache__/
