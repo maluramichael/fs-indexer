@@ -1,36 +1,56 @@
 import os
+from PIL import Image as PILImage
 
-from lib.args import args
+from lib.entities import Entry
+from lib.rewrite import Rewrite
+from lib.scanner_args import args
 from lib.thumbnail import generate_thumbnail_path, generate_image_thumbnail, generate_video_thumbnail
+from lib.video import get_video_meta_data
 
 
-def parse_content_image(meta_data):
-    thumbnail_path = generate_thumbnail_path(meta_data)
-    size = args.thumbnail_size
+def parse_content_image(entity):
+    rewriter = Rewrite(args.rewrite, args.path)
+    thumbnail_path = generate_thumbnail_path(entity)
+    thumbnail_size = args.thumbnail_size
+    original_file_path = os.path.join(entity.path, entity.name)
+    original_file_path = rewriter.rewrite(original_file_path)
 
-    if thumbnail_path and not os.path.isfile(thumbnail_path):
-        success = generate_image_thumbnail(meta_data['original_path'], thumbnail_path, size)
+    if thumbnail_path is None:
+        raise Exception('Could not generate thumbnail path')
 
-        if success:
-            meta_data['thumbnail_path'] = thumbnail_path
-        else:
-            meta_data['thumbnail_path'] = None
+    if not os.path.isfile(thumbnail_path):
+        generate_image_thumbnail(original_file_path, thumbnail_path, thumbnail_size)
 
-    return meta_data
+    try:
+        image = PILImage.open(original_file_path)
+        entity.width, entity.height = image.size
+    except Exception as e:
+        print(f'Could not open image {original_file_path}: {e}')
+        return None
+
+    return entity
 
 
-def parse_content_video(meta_data):
-    thumbnail_path = generate_thumbnail_path(meta_data)
+def parse_content_video(entity):
+    rewriter = Rewrite(args.rewrite, args.path)
+    thumbnail_path = generate_thumbnail_path(entity)
+    thumbnail_size = args.thumbnail_size
+    original_file_path = os.path.join(entity.path, entity.name)
+    original_file_path = rewriter.rewrite(original_file_path)
 
-    if thumbnail_path and not os.path.isfile(thumbnail_path):
-        success = generate_video_thumbnail(meta_data['original_path'], thumbnail_path)
+    if thumbnail_path is None:
+        raise Exception('Could not generate thumbnail path')
 
-        if success:
-            meta_data['thumbnail_path'] = thumbnail_path
-        else:
-            meta_data['thumbnail_path'] = None
+    if not os.path.isfile(thumbnail_path):
+        generate_video_thumbnail(original_file_path, thumbnail_path)
 
-    return meta_data
+    video_meta_data = get_video_meta_data(original_file_path)
+
+    entity.duration_in_seconds = video_meta_data['duration']
+    entity.width = video_meta_data['width']
+    entity.height = video_meta_data['height']
+
+    return entity
 
 
 all_type_content_map = {
@@ -40,11 +60,11 @@ all_type_content_map = {
 type_content_map = {}
 
 
-def parse_content(meta_data):
-    if meta_data['type'] == 'dir':
-        return meta_data
+def parse_content(entry: Entry):
+    if entry.type == 'dir':
+        return entry
 
-    if meta_data['type'] not in type_content_map:
+    if entry.type not in type_content_map:
         return None
 
-    return type_content_map[meta_data['type']](meta_data)
+    return type_content_map[entry.type](entry)

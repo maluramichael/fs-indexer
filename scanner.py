@@ -1,70 +1,113 @@
 import os
+import queue
 import sys
-from typing import Iterator
+import threading
+import time
 
-from lib.args import args
-from lib.meta import create_base_meta_data
+from lib.scanner_args import args
+from lib.db import flush_bulk, create_db, session
+from lib.entities import Directory, Entry, Image, Video
 from lib.parser import all_type_content_map, type_content_map, parse_content
-from lib.skip import skip_dir, skip_file
+from walker import walk_filesystem
+
+job_queue = queue.Queue()
 
 
-def walk_filesystem() -> Iterator[dict]:
-    path = args.path
-    rewrite = args.rewrite
-    parse_dirs = not args.only_files or args.only_dirs
-    parse_files = not args.only_dirs or args.only_files
+def worker():
+    print(f"Starting worker: {threading.current_thread().name}")
 
-    for root, dirs, files in os.walk(path):
-        if skip_dir(root):
+    while True:
+        meta_data = job_queue.get()
+
+        if meta_data is None:
+            break
+
+        print(f"Processing: {meta_data['path']}")
+        time.sleep(10)
+        job_queue.task_done()
+
+
+def start_meta_data_workers(pool_size: int):
+    threads = []
+
+    for i in range(pool_size):
+        thread = threading.Thread(target=worker, name=f"MetaDataWorker-{i}")
+        thread.start()
+        threads.append(thread)
+
+    return threads
+
+
+def stop_meta_data_workers(threads):
+    for thread in threads:
+        job_queue.put(None)
+    for thread in threads:
+        thread.join()
+
+
+def walk_and_update_database():
+    type_to_model_map = {
+        'image': Image,
+        'video': Video,
+        'audio': None,
+        'document': None,
+        'archive': None,
+        'other': None,
+    }
+
+    # run scanner
+    # put all files into the database
+    for meta_data in walk_filesystem():
+        print(f"Processing: {meta_data['path']}")
+        directory = session.query(Directory).filter_by(path=meta_data['path'].get_directory()).first()
+
+        if directory is None:
+            directory = Directory()
+            directory.path = meta_data['path'].get_directory()
+            session.add(directory)
+            session.commit()
+
+        type = meta_data['type']
+        orm_model = type_to_model_map[type]
+
+        if orm_model is None:
             continue
 
-        if parse_dirs:
-            sorted_dirs = sorted(dirs)
-            for directory in sorted_dirs:
-                dir_path = os.path.join(root, directory)
-                rewritten_path = dir_path
+        path = meta_data['path'].get_directory()
+        name = meta_data['name']
+        entry = session.query(orm_model).filter_by(
+            path=path,
+            name=name
+        ).first()
 
-                if rewrite:
-                    rewritten_path = dir_path.replace(path, rewrite)
+        if entry is None:
+            entry = orm_model()
+            entry.path = path
+            entry.name = name
+            entry.mtime = meta_data['mtime']
+            entry.type = meta_data['type']
+            entry.size = meta_data['size']
 
-                if skip_dir(rewritten_path):
-                    continue
+            entry = parse_content(entry)
 
-                print(f'Parsing directory: {dir_path}')
-                meta_data = create_base_meta_data(dir_path)
-                meta_data['name'] = directory
-                meta_data['path'] = rewritten_path
-                meta_data['original_path'] = dir_path
+            session.add(entry)
+            session.commit()
 
-                yield meta_data
-
-        if parse_files:
-            sorted_files = sorted(files)
-
-            for file in sorted_files:
-                file_path = os.path.join(root, file)
-                rewritten_path = file_path
-
-                if rewrite:
-                    rewritten_path = file_path.replace(path, rewrite)
-
-                if skip_file(file, rewritten_path):
-                    continue
-
-                print(f'Parsing file: {file_path}')
-                meta_data = create_base_meta_data(file_path)
-
-                if meta_data is None:
-                    continue
-
-                meta_data['name'] = file
-                meta_data['path'] = rewritten_path
-                meta_data['original_path'] = file_path
-
-                yield meta_data
+        # # meta_data = parse_content(meta_data)
+        # job_queue.put(meta_data)
+        #
+        # if job_queue.qsize() > 100:
+        #     print("Waiting for queue to drain")
+        #     job_queue.join()
+        #     print("Queue drained")
+    flush_bulk()
 
 
 def main():
+    # prepare database
+    create_db()
+
+    # make sure paths exist
     if not os.path.exists(args.path):
         print("The path provided does not exist")
         sys.exit(1)
@@ -72,6 +115,7 @@ def main():
     if not os.path.exists(args.thumbnail_path):
         os.makedirs(args.thumbnail_path)
 
+    # prepare type maps
     if args.include_type is None:
         args.include_type = list(all_type_content_map.keys())
 
@@ -82,13 +126,13 @@ def main():
 
         type_content_map[included_type] = all_type_content_map[included_type]
 
-    for meta_data in walk_filesystem():
-        print(f"Found: {meta_data['path']}")
+    # prepare worker pool
+    # workers = start_meta_data_workers(pool_size=args.pool_size)
 
-        # process meta data further
-        meta_data = parse_content(meta_data)
+    walk_and_update_database()
 
-        # save meta data to database
+    # job_queue.join()
+    # stop_meta_data_workers(workers)
 
 
 if __name__ == '__main__':

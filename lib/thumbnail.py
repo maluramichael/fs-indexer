@@ -5,16 +5,17 @@ import sys
 import ffmpeg
 from PIL import Image
 
-from lib.args import args
+from lib.scanner_args import args
 
 
-def get_full_thumbnail_path(meta_data):
+def get_full_thumbnail_path(entry):
     thumbnail_path = args.thumbnail_path
 
     if thumbnail_path is None:
-        return meta_data
+        return entry
 
-    path_as_sha1_hash = hashlib.sha1(meta_data['path'].encode('utf-8')).hexdigest()
+    full_path = os.path.join(entry.path, entry.name)
+    path_as_sha1_hash = hashlib.sha1(full_path.encode('utf-8')).hexdigest()
     dir_parts = path_as_sha1_hash[:2]
     thumbnail_dir = os.path.join(thumbnail_path, dir_parts)
     thumbnail_path = os.path.join(thumbnail_dir, path_as_sha1_hash + '.jpg')
@@ -43,7 +44,7 @@ def generate_image_thumbnail(path, thumbnail_path, size=(256, 256)):
         return False
 
 
-def generate_video_thumbnail(path, thumbnail_path):
+def generate_video_thumbnail(path, thumbnail_path, size=(256, 256)):
     ffprobe_path = os.path.join(os.path.dirname(args.ffmpeg_path), 'ffprobe')
 
     try:
@@ -51,7 +52,7 @@ def generate_video_thumbnail(path, thumbnail_path):
         video_stream = next((stream for stream in probe['streams'] if stream['codec_type'] == 'video'), None)
         duration = float(video_stream['duration']) // 2
         width = int(video_stream['width'])
-        width = min(width, 256)
+        width = min(width, size[0])
 
         (
             ffmpeg

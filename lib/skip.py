@@ -1,7 +1,7 @@
 import os
 from pathlib import PurePath
 
-from lib.args import args
+from lib.scanner_args import args
 
 
 def skip_dir(path):
